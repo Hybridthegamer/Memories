@@ -1,6 +1,5 @@
 from functools import lru_cache
 
-from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,7 +26,11 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
-    CORS_ALLOWED_ORIGINS: list[str] = ["http://localhost:5173"]
+    # Kept as a plain string (not list[str]) because pydantic-settings tries to
+    # JSON-decode any env var mapped to a list-typed field before validators
+    # run — that breaks on a plain comma-separated value. Parse it ourselves
+    # via the property below instead.
+    CORS_ALLOWED_ORIGINS: str = "http://localhost:5173"
 
     # Rate limiting (Phase 3 hardening) — requests per window, per user, for upload endpoints.
     UPLOAD_RATE_LIMIT_COUNT: int = 30
@@ -42,12 +45,9 @@ class Settings(BaseSettings):
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 10
 
-    @field_validator("CORS_ALLOWED_ORIGINS", mode="before")
-    @classmethod
-    def _split_origins(cls, v):
-        if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",") if origin.strip()]
-        return v
+    @property
+    def cors_allowed_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.CORS_ALLOWED_ORIGINS.split(",") if origin.strip()]
 
 
 @lru_cache
