@@ -2,6 +2,7 @@ import logging
 import os
 import subprocess
 import tempfile
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from PIL import Image
 from sqlalchemy import create_engine, text
@@ -20,7 +21,17 @@ _sync_engine = None
 def _get_sync_engine():
     global _sync_engine
     if _sync_engine is None:
-        sync_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+        parts = urlsplit(settings.DATABASE_URL)
+        # asyncpg wants `ssl=require` in the URL (see app/config.py); psycopg2
+        # (libpq) only understands the equivalent `sslmode=require`. Reusing
+        # the same DATABASE_URL for both drivers means this has to be
+        # translated, not just have its scheme swapped — passing `ssl=` straight
+        # through makes psycopg2 raise "invalid dsn: invalid connection option
+        # ssl" on every connection attempt.
+        query_pairs = [("sslmode" if k == "ssl" else k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)]
+        sync_url = urlunsplit(
+            ("postgresql+psycopg2", parts.netloc, parts.path, urlencode(query_pairs), parts.fragment)
+        )
         _sync_engine = create_engine(sync_url, pool_pre_ping=True, pool_size=5, max_overflow=5)
     return _sync_engine
 
