@@ -1,18 +1,27 @@
+function withOpacity(variableName) {
+  return ({ opacityValue }) => {
+    if (opacityValue === undefined) {
+      return `oklch(var(${variableName}))`;
+    }
+    return `oklch(var(${variableName}) / ${opacityValue})`;
+  };
+}
+
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {
       colors: {
-        bg: "oklch(0.16 0.012 70)",
-        surface: "oklch(0.21 0.014 70)",
-        surface2: "oklch(0.27 0.017 70)",
-        ink: "oklch(0.96 0.01 80)",
-        muted: "oklch(0.74 0.02 75)",
-        border: "oklch(0.33 0.015 70)",
-        accent: "oklch(0.75 0.16 75)",
-        accentDim: "oklch(0.6 0.13 75)",
-        accentInk: "oklch(0.18 0.02 75)",
+        bg: withOpacity("--color-bg"),
+        surface: withOpacity("--color-surface"),
+        surface2: withOpacity("--color-surface2"),
+        ink: withOpacity("--color-ink"),
+        muted: withOpacity("--color-muted"),
+        border: withOpacity("--color-border"),
+        accent: withOpacity("--color-accent"),
+        accentDim: withOpacity("--color-accentDim"),
+        accentInk: withOpacity("--color-accentInk"),
       },
       fontFamily: {
         display: ["Fraunces", "ui-serif", "Georgia", "serif"],

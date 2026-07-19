@@ -10,6 +10,7 @@ class UploadRequestIn(BaseModel):
     filename: str = Field(min_length=1, max_length=512)
     content_type: str
     size_bytes: int = Field(gt=0)
+    folder: str | None = Field(default=None, max_length=60)
 
     @field_validator("content_type")
     @classmethod
@@ -17,6 +18,14 @@ class UploadRequestIn(BaseModel):
         if not (v.startswith("image/") or v.startswith("video/")):
             raise ValueError("content_type must be image/* or video/*")
         return v
+
+    @field_validator("folder")
+    @classmethod
+    def _normalize_folder(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        return v or None
 
 
 class UploadRequestOut(BaseModel):
@@ -71,6 +80,7 @@ class FileOut(BaseModel):
     thumbnail_url: str | None = None
     created_at: datetime
     delete_deadline: datetime
+    folder: str | None = None
 
 
 class FileListOut(BaseModel):
@@ -83,3 +93,12 @@ class FileListOut(BaseModel):
 class DownloadUrlOut(BaseModel):
     url: str
     expires_in: int
+
+
+class FolderOut(BaseModel):
+    name: str
+    file_count: int
+
+
+class FolderListOut(BaseModel):
+    folders: list[FolderOut]

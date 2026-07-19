@@ -1,9 +1,10 @@
+import { useState } from "react";
 import { GalleryGrid } from "../components/GalleryGrid";
 import { UploadDropzone } from "../components/UploadDropzone";
 import { Marquee } from "../components/magic/Marquee";
 import { NumberTicker } from "../components/magic/NumberTicker";
 import { Particles } from "../components/magic/Particles";
-import { useWallStats } from "../hooks/useFiles";
+import { useFolders, useWallStats } from "../hooks/useFiles";
 
 const TICKER_ITEMS = [
   "no accounts, ever",
@@ -15,6 +16,8 @@ const TICKER_ITEMS = [
 
 export function GalleryPage() {
   const { data: total } = useWallStats();
+  const { data: folders } = useFolders();
+  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
 
   return (
     <div className="min-h-screen bg-bg">
@@ -55,7 +58,35 @@ export function GalleryPage() {
       </header>
 
       <main className="mx-auto max-w-6xl px-6 py-12">
-        <GalleryGrid />
+        {!!folders?.length && (
+          <div className="mb-8 flex flex-wrap items-center justify-center gap-2">
+            <button
+              onClick={() => setSelectedFolder(null)}
+              className={`rounded-full border px-4 py-1.5 text-sm transition-colors ${
+                selectedFolder === null
+                  ? "border-accent bg-accent text-accentInk"
+                  : "border-border text-muted hover:border-accent hover:text-accent"
+              }`}
+            >
+              All
+            </button>
+            {folders.map((f) => (
+              <button
+                key={f.name}
+                onClick={() => setSelectedFolder(f.name)}
+                className={`rounded-full border px-4 py-1.5 text-sm transition-colors ${
+                  selectedFolder === f.name
+                    ? "border-accent bg-accent text-accentInk"
+                    : "border-border text-muted hover:border-accent hover:text-accent"
+                }`}
+              >
+                {f.name} <span className="opacity-60">({f.file_count})</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <GalleryGrid folder={selectedFolder} />
       </main>
 
       <footer className="border-t border-border px-6 py-8 text-center text-xs text-muted">

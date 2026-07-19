@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { deleteFile, fetchDownloadUrl, fetchFiles } from "../api/files";
+import { deleteFile, fetchDownloadUrl, fetchFiles, fetchFolders } from "../api/files";
 import type { FileListResponse } from "../types";
 
 const PAGE_SIZE = 30;
@@ -13,10 +13,18 @@ export function useWallStats() {
   });
 }
 
-export function useFileWall() {
+export function useFolders() {
+  return useQuery({
+    queryKey: ["files", "folders"],
+    queryFn: fetchFolders,
+    staleTime: 30_000,
+  });
+}
+
+export function useFileWall(folder?: string | null) {
   return useInfiniteQuery<FileListResponse>({
-    queryKey: ["files"],
-    queryFn: ({ pageParam }) => fetchFiles(pageParam as number, PAGE_SIZE),
+    queryKey: ["files", "wall", folder ?? null],
+    queryFn: ({ pageParam }) => fetchFiles(pageParam as number, PAGE_SIZE, folder),
     initialPageParam: 1,
     getNextPageParam: (lastPage) => {
       const loaded = lastPage.page * lastPage.page_size;

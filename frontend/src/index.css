@@ -3,6 +3,22 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    /* Raw OKLCH channel triples (no color() wrapper) so tailwind.config.js
+       can compose them with an alpha channel for opacity-modifier utilities
+       like bg-bg/60 — a literal oklch(...) string in the config can't be
+       combined with /NN by Tailwind, this can. */
+    --color-bg: 0.16 0.012 70;
+    --color-surface: 0.21 0.014 70;
+    --color-surface2: 0.27 0.017 70;
+    --color-ink: 0.96 0.01 80;
+    --color-muted: 0.74 0.02 75;
+    --color-border: 0.33 0.015 70;
+    --color-accent: 0.75 0.16 75;
+    --color-accentDim: 0.6 0.13 75;
+    --color-accentInk: 0.18 0.02 75;
+  }
+
   html {
     @apply bg-bg;
   }

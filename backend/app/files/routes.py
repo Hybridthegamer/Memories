@@ -19,6 +19,8 @@ from app.schemas import (
     DownloadUrlOut,
     FileListOut,
     FileOut,
+    FolderListOut,
+    FolderOut,
     MultipartCompleteIn,
     MultipartInitiateOut,
     PartUrlIn,
@@ -78,6 +80,7 @@ def _to_file_out(f: File, thumbnail_url: str | None) -> FileOut:
         thumbnail_url=thumbnail_url,
         created_at=f.created_at,
         delete_deadline=_delete_deadline(f.created_at),
+        folder=f.folder,
     )
 
 
@@ -108,6 +111,7 @@ async def upload_request(
         media_type=media_type,
         status="pending",
         delete_token_hash=token_hash,
+        folder=payload.folder,
     )
     db.add(file)
     await db.commit()
@@ -167,6 +171,7 @@ async def multipart_initiate(
         status="pending",
         upload_id=upload_id,
         delete_token_hash=token_hash,
+        folder=payload.folder,
     )
     db.add(file)
     await db.commit()
@@ -237,17 +242,31 @@ async def multipart_abort(
 
 # ---- Retrieval ----
 
+@router.get("/folders", response_model=FolderListOut)
+async def list_folders(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(File.folder, func.count(File.id))
+        .where(File.folder.is_not(None), File.status != "pending", File.status != "failed")
+        .group_by(File.folder)
+        .order_by(func.count(File.id).desc())
+    )
+    return FolderListOut(folders=[FolderOut(name=name, file_count=count) for name, count in result.all()])
+
+
 @router.get("", response_model=FileListOut)
 async def list_files(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     media_type: str | None = Query(None, pattern="^(image|video)$"),
+    folder: str | None = Query(None, max_length=60),
     db: AsyncSession = Depends(get_db),
 ):
     # Global gallery: every ready/processing file from every uploader, newest first.
     filters = [File.status != "pending", File.status != "failed"]
     if media_type:
         filters.append(File.media_type == media_type)
+    if folder:
+        filters.append(File.folder == folder)
 
     count_result = await db.execute(select(func.count(File.id)).where(*filters))
     total = count_result.scalar_one()

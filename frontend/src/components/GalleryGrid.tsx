@@ -4,8 +4,12 @@ import { useDeleteFile, useDownloadUrl, useFileWall } from "../hooks/useFiles";
 import { FileCard } from "./FileCard";
 import { VideoPlayerModal } from "./VideoPlayerModal";
 
-export function GalleryGrid() {
-  const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage } = useFileWall();
+interface GalleryGridProps {
+  folder?: string | null;
+}
+
+export function GalleryGrid({ folder }: GalleryGridProps) {
+  const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage } = useFileWall(folder);
   const downloadUrl = useDownloadUrl();
   const deleteFile = useDeleteFile();
   const [playingFileId, setPlayingFileId] = useState<string | null>(null);
@@ -29,7 +33,7 @@ export function GalleryGrid() {
   if (items.length === 0) {
     return (
       <p className="py-16 text-center font-display text-xl text-muted">
-        Nothing here yet — be the first to add a memory.
+        {folder ? `Nothing in "${folder}" yet.` : "Nothing here yet — be the first to add a memory."}
       </p>
     );
   }

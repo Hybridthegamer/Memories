@@ -65,6 +65,12 @@ export function FileCard({ file, onDownload, onDelete, onPlay }: FileCardProps) 
         </span>
       )}
 
+      {file.folder && (
+        <span className="pointer-events-none absolute right-2 top-2 max-w-[70%] truncate rounded-full bg-bg/70 px-2 py-0.5 text-xs text-muted backdrop-blur-sm">
+          {file.folder}
+        </span>
+      )}
+
       <div className="pointer-events-none absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-bg/90 via-bg/0 to-bg/0 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
         <div className="pointer-events-auto flex items-center justify-between gap-2 p-3">
           <button

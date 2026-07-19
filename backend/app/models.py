@@ -15,6 +15,7 @@ class File(Base):
         CheckConstraint("media_type in ('image','video')", name="ck_media_type"),
         CheckConstraint("status in ('pending','uploaded','processing','ready','failed')", name="ck_status"),
         Index("idx_files_status", "status"),
+        Index("idx_files_folder", "folder"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -26,6 +27,10 @@ class File(Base):
     status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
     thumbnail_key: Mapped[str | None] = mapped_column(String, nullable=True)
     upload_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Free-text label anyone can set at upload time to group uploads for
+    # browsing — not an access-control boundary, just organization. Shared
+    # and reusable by anyone, matching the no-accounts design.
+    folder: Mapped[str | None] = mapped_column(String(60), nullable=True)
     # SHA-256 hex digest of the anonymous uploader's delete token. The raw
     # token is returned to the browser exactly once, at upload time, and
     # never stored — only its hash. Deleting requires presenting a token

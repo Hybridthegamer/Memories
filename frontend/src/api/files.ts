@@ -1,9 +1,11 @@
 import { api } from "./client";
 import { getDeleteToken, forgetUpload } from "../lib/ownership";
-import type { FileListResponse } from "../types";
+import type { FileListResponse, FolderSummary } from "../types";
 
-export async function fetchFiles(page: number, pageSize = 50): Promise<FileListResponse> {
-  const { data } = await api.get<FileListResponse>(`/files?page=${page}&page_size=${pageSize}`);
+export async function fetchFiles(page: number, pageSize = 50, folder?: string | null): Promise<FileListResponse> {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+  if (folder) params.set("folder", folder);
+  const { data } = await api.get<FileListResponse>(`/files?${params.toString()}`);
   // Guard against a misconfigured API base URL: a wrong/missing origin can
   // make requests land on this app's own dev/static server instead of the
   // API, which happily returns index.html as a 200 rather than erroring.
@@ -12,6 +14,11 @@ export async function fetchFiles(page: number, pageSize = 50): Promise<FileListR
     throw new Error("Unexpected response from the API — check VITE_API_BASE_URL.");
   }
   return data;
+}
+
+export async function fetchFolders(): Promise<FolderSummary[]> {
+  const { data } = await api.get<{ folders: FolderSummary[] }>("/files/folders");
+  return Array.isArray(data?.folders) ? data.folders : [];
 }
 
 export async function fetchDownloadUrl(fileId: string): Promise<string> {

@@ -31,18 +31,19 @@ function putWithProgress(
 
 const SINGLE_UPLOAD_THRESHOLD = 50 * 1024 * 1024; // 50MB
 
-export async function uploadFile(file: File, onProgress: UploadProgressCallback): Promise<string> {
+export async function uploadFile(file: File, onProgress: UploadProgressCallback, folder?: string): Promise<string> {
   if (file.size < SINGLE_UPLOAD_THRESHOLD) {
-    return uploadSingle(file, onProgress);
+    return uploadSingle(file, onProgress, folder);
   }
-  return uploadMultipart(file, onProgress);
+  return uploadMultipart(file, onProgress, folder);
 }
 
-async function uploadSingle(file: File, onProgress: UploadProgressCallback): Promise<string> {
+async function uploadSingle(file: File, onProgress: UploadProgressCallback, folder?: string): Promise<string> {
   const { data } = await api.post("/files/upload-request", {
     filename: file.name,
     content_type: file.type,
     size_bytes: file.size,
+    folder: folder || undefined,
   });
   const { file_id, upload_url, delete_token } = data;
 
@@ -52,11 +53,12 @@ async function uploadSingle(file: File, onProgress: UploadProgressCallback): Pro
   return file_id;
 }
 
-async function uploadMultipart(file: File, onProgress: UploadProgressCallback): Promise<string> {
+async function uploadMultipart(file: File, onProgress: UploadProgressCallback, folder?: string): Promise<string> {
   const { data } = await api.post("/files/upload-request/multipart/initiate", {
     filename: file.name,
     content_type: file.type,
     size_bytes: file.size,
+    folder: folder || undefined,
   });
   const { file_id, part_size_bytes, delete_token } = data;
 

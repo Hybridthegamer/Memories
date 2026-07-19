@@ -11,6 +11,7 @@ export interface FileItem {
   thumbnail_url: string | null;
   created_at: string;
   delete_deadline: string;
+  folder: string | null;
 }
 
 export interface FileListResponse {
@@ -18,4 +19,9 @@ export interface FileListResponse {
   page: number;
   page_size: number;
   total: number;
+}
+
+export interface FolderSummary {
+  name: string;
+  file_count: number;
 }

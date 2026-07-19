@@ -6,15 +6,16 @@ import { ShimmerButton } from "./magic/ShimmerButton";
 export function UploadDropzone() {
   const { items, handleFiles } = useUploader();
   const [isDragging, setIsDragging] = useState(false);
+  const [folder, setFolder] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   const onDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragging(false);
-      if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+      if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files, folder);
     },
-    [handleFiles]
+    [handleFiles, folder]
   );
 
   return (
@@ -35,13 +36,26 @@ export function UploadDropzone() {
           type="file"
           multiple
           accept="image/*,video/*"
-          onChange={(e) => e.target.files && handleFiles(e.target.files)}
+          onChange={(e) => e.target.files && handleFiles(e.target.files, folder)}
           className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
           aria-label="Choose photos or videos to upload"
         />
         <p className="font-display text-2xl text-ink">Drop it on the wall</p>
         <p className="mt-2 text-sm text-muted">Photos and videos, no account needed. Everyone can see it.</p>
-        <div className="mt-5">
+
+        <div className="relative z-10 mx-auto mt-5 max-w-xs">
+          <input
+            type="text"
+            value={folder}
+            onChange={(e) => setFolder(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            placeholder="Folder name (optional)"
+            maxLength={60}
+            className="w-full rounded-full border border-border bg-bg/60 px-4 py-2 text-center text-sm text-ink placeholder:text-muted focus:border-accent focus:outline-none"
+          />
+        </div>
+
+        <div className="relative z-10 mt-4">
           <ShimmerButton onClick={() => inputRef.current?.click()}>Choose files</ShimmerButton>
         </div>
       </div>
@@ -54,23 +68,37 @@ export function UploadDropzone() {
             exit={{ opacity: 0, height: 0 }}
             className="mt-4 space-y-2 overflow-hidden"
           >
-            {Object.entries(items).map(([key, item]) => (
-              <div key={key} className="rounded-xl border border-border bg-surface px-4 py-3 text-sm">
-                <div className="flex justify-between">
-                  <span className="max-w-[70%] truncate text-ink">{item.name}</span>
-                  <span className={item.error ? "text-red-400" : "text-muted"}>
-                    {item.error ?? `${item.progress}%`}
-                  </span>
-                </div>
-                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-surface2">
-                  <motion.div
-                    className={`h-full rounded-full ${item.error ? "bg-red-500" : "bg-accent"}`}
-                    animate={{ width: `${item.error ? 100 : item.progress}%` }}
-                    transition={{ ease: "easeOut", duration: 0.3 }}
-                  />
-                </div>
-              </div>
-            ))}
+            <AnimatePresence initial={false}>
+              {Object.entries(items).map(([key, item]) => (
+                <motion.div
+                  key={key}
+                  layout
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.96 }}
+                  transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+                  className={`rounded-xl border px-4 py-3 text-sm transition-colors ${
+                    item.done ? "border-accent/40 bg-accent/5" : "border-border bg-surface"
+                  }`}
+                >
+                  <div className="flex justify-between">
+                    <span className="max-w-[70%] truncate text-ink">{item.name}</span>
+                    <span className={item.error ? "text-red-400" : item.done ? "text-accent" : "text-muted"}>
+                      {item.error ?? (item.done ? "Uploaded ✓" : `${item.progress}%`)}
+                    </span>
+                  </div>
+                  <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-surface2">
+                    <motion.div
+                      className={`h-full rounded-full ${
+                        item.error ? "bg-red-500" : item.done ? "bg-accent" : "bg-accent/70"
+                      }`}
+                      animate={{ width: `${item.error ? 100 : item.progress}%` }}
+                      transition={{ ease: "easeOut", duration: 0.3 }}
+                    />
+                  </div>
+                </motion.div>
+              ))}
+            </AnimatePresence>
           </motion.div>
         )}
       </AnimatePresence>
