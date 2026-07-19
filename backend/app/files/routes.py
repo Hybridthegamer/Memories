@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
@@ -35,6 +35,20 @@ _upload_rate_limit = rate_limit_by_ip(
     "upload", count=settings.UPLOAD_RATE_LIMIT_COUNT, window_seconds=settings.UPLOAD_RATE_LIMIT_WINDOW_SECONDS
 )
 _part_url_rate_limit = rate_limit_by_ip("upload-part", count=600, window_seconds=60)
+_read_rate_limit = rate_limit_by_ip(
+    "read", count=settings.READ_RATE_LIMIT_COUNT, window_seconds=settings.READ_RATE_LIMIT_WINDOW_SECONDS
+)
+_download_rate_limit = rate_limit_by_ip(
+    "download", count=settings.DOWNLOAD_RATE_LIMIT_COUNT, window_seconds=settings.DOWNLOAD_RATE_LIMIT_WINDOW_SECONDS
+)
+_delete_rate_limit = rate_limit_by_ip(
+    "delete", count=settings.DELETE_RATE_LIMIT_COUNT, window_seconds=settings.DELETE_RATE_LIMIT_WINDOW_SECONDS
+)
+
+# Arbitrary constant identifying the global-quota mutex to Postgres advisory
+# locks. It has no meaning beyond being a stable, shared identity that every
+# concurrent request serializes on for the duration of its transaction.
+_QUOTA_LOCK_KEY = 875321
 
 
 def _media_type_from_content_type(content_type: str) -> str:
@@ -60,7 +74,36 @@ async def _get_file_or_404(db: AsyncSession, file_id: uuid.UUID) -> File:
     return file
 
 
+async def _get_file_for_update_or_404(db: AsyncSession, file_id: uuid.UUID) -> File:
+    """Same as _get_file_or_404, but locks the row (SELECT ... FOR UPDATE)
+    for the rest of the transaction. Without this, two concurrent deletes
+    for the same file both pass the token/deadline check against the same
+    still-present row before either commits, and both report success even
+    though only one delete is real — a locked read makes the second
+    request block until the first commits, then see the row already gone.
+    """
+    result = await db.execute(select(File).where(File.id == file_id).with_for_update())
+    file = result.scalar_one_or_none()
+    if file is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+    return file
+
+
 async def _check_global_quota(db: AsyncSession, incoming_bytes: int) -> None:
+    # Without this lock, two requests can both read the same used_bytes,
+    # both see room for their own upload, and both commit — overshooting the
+    # quota (classic check-then-act race). The lock is transaction-scoped
+    # and releases automatically at commit/rollback, so it only serializes
+    # the check+reserve, not the whole request.
+    await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _QUOTA_LOCK_KEY})
+
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(seconds=settings.PENDING_UPLOAD_STALE_SECONDS)
+    # Rows stuck in "pending" past the abandonment cutoff were never
+    # followed through — sweep them so they stop occupying quota forever.
+    # Otherwise spamming upload-requests without uploading anything would
+    # let anyone exhaust the whole platform quota for free.
+    await db.execute(delete(File).where(File.status == "pending", File.created_at < stale_cutoff))
+
     result = await db.execute(select(func.coalesce(func.sum(File.size_bytes), 0)).where(File.status != "failed"))
     used_bytes = result.scalar_one()
     if used_bytes + incoming_bytes > settings.GLOBAL_STORAGE_QUOTA_BYTES:
@@ -134,6 +177,14 @@ async def confirm_upload(
     file = await _get_file_or_404(db, file_id)
     if file.status not in ("pending", "processing"):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"File is already {file.status}")
+
+    # The client's declared size_bytes was only ever a claim used for the
+    # pre-upload quota check — verify it against what actually landed in B2
+    # before it's trusted for real quota accounting, otherwise a client
+    # could under-report size to dodge the check and then upload far more.
+    real_size = await run_in_threadpool(storage_service.head_object_size, file.storage_key)
+    if real_size is not None:
+        file.size_bytes = real_size
 
     file.status = "processing"
     await db.commit()
@@ -217,6 +268,10 @@ async def multipart_complete(
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to complete upload") from exc
 
+    real_size = await run_in_threadpool(storage_service.head_object_size, file.storage_key)
+    if real_size is not None:
+        file.size_bytes = real_size
+
     file.status = "processing"
     await db.commit()
 
@@ -243,7 +298,7 @@ async def multipart_abort(
 # ---- Retrieval ----
 
 @router.get("/folders", response_model=FolderListOut)
-async def list_folders(db: AsyncSession = Depends(get_db)):
+async def list_folders(db: AsyncSession = Depends(get_db), _rl: None = Depends(_read_rate_limit)):
     result = await db.execute(
         select(File.folder, func.count(File.id))
         .where(File.folder.is_not(None), File.status != "pending", File.status != "failed")
@@ -260,6 +315,7 @@ async def list_files(
     media_type: str | None = Query(None, pattern="^(image|video)$"),
     folder: str | None = Query(None, max_length=60),
     db: AsyncSession = Depends(get_db),
+    _rl: None = Depends(_read_rate_limit),
 ):
     # Global gallery: every ready/processing file from every uploader, newest first.
     filters = [File.status != "pending", File.status != "failed"]
@@ -284,7 +340,7 @@ async def list_files(
     for f in files:
         thumbnail_url = None
         if f.thumbnail_key and f.status == "ready":
-            thumbnail_url = storage_service.generate_presigned_download_url(f.thumbnail_key)
+            thumbnail_url = storage_service.build_thumbnail_url(f.thumbnail_key)
         items.append(_to_file_out(f, thumbnail_url))
 
     return FileListOut(items=items, page=page, page_size=page_size, total=total)
@@ -294,6 +350,7 @@ async def list_files(
 async def get_download_url(
     file_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    _rl: None = Depends(_download_rate_limit),
 ):
     file = await _get_file_or_404(db, file_id)
     if file.status not in ("uploaded", "processing", "ready"):
@@ -308,8 +365,9 @@ async def delete_file(
     file_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     x_delete_token: str | None = Header(default=None),
+    _rl: None = Depends(_delete_rate_limit),
 ):
-    file = await _get_file_or_404(db, file_id)
+    file = await _get_file_for_update_or_404(db, file_id)
 
     if not x_delete_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing delete token")

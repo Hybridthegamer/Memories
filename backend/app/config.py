@@ -17,6 +17,16 @@ class Settings(BaseSettings):
     S3_SECRET_ACCESS_KEY: str = ""
     S3_BUCKET_NAME: str = ""
 
+    # Optional: a separate, publicly-readable B2 bucket for thumbnails only,
+    # fronted by a CDN (e.g. Cloudflare). If unset, thumbnails fall back to
+    # living in the main bucket behind presigned URLs. Originals always stay
+    # in S3_BUCKET_NAME regardless.
+    S3_THUMBNAIL_BUCKET_NAME: str = ""
+    # Public CDN base URL that proxies/caches the thumbnail bucket, e.g.
+    # "https://cdn.example.com". When set, thumbnail URLs point directly at
+    # the CDN instead of generating a presigned URL per request.
+    THUMBNAIL_CDN_BASE_URL: str = ""
+
     UPLOAD_URL_EXPIRY_SECONDS: int = 900
     DOWNLOAD_URL_EXPIRY_SECONDS: int = 3600
     MULTIPART_PART_SIZE_BYTES: int = 10 * 1024 * 1024
@@ -33,9 +43,35 @@ class Settings(BaseSettings):
     UPLOAD_RATE_LIMIT_COUNT: int = 30
     UPLOAD_RATE_LIMIT_WINDOW_SECONDS: int = 60
 
+    # Read-path rate limits are looser than upload since browsing/downloading
+    # is the platform's core normal usage, but still bounded so a single IP
+    # can't hammer the DB/B2 with an unbounded request flood.
+    READ_RATE_LIMIT_COUNT: int = 300
+    READ_RATE_LIMIT_WINDOW_SECONDS: int = 60
+    DOWNLOAD_RATE_LIMIT_COUNT: int = 120
+    DOWNLOAD_RATE_LIMIT_WINDOW_SECONDS: int = 60
+    DELETE_RATE_LIMIT_COUNT: int = 30
+    DELETE_RATE_LIMIT_WINDOW_SECONDS: int = 60
+
+    # Hard cap on request body size, enforced before FastAPI/Pydantic even
+    # parses the body. Sized to comfortably cover a multipart-complete
+    # payload listing thousands of parts, while still bounding how much
+    # memory/bandwidth a single malicious request can consume.
+    MAX_REQUEST_BODY_BYTES: int = 2 * 1024 * 1024
+
     # Global forever-storage quota across all uploads from everyone, in bytes.
     # Default 1TB, matching the platform's budget target.
     GLOBAL_STORAGE_QUOTA_BYTES: int = 1024 * 1024 * 1024 * 1024
+
+    # A "pending" file (upload URL issued, nothing uploaded yet) still counts
+    # toward the quota so a client can't slip past the check and then upload
+    # something bigger. But without a cutoff, spamming upload-requests that
+    # are never followed through would let anyone exhaust the whole quota
+    # with phantom reservations. Rows still pending past this many seconds
+    # are treated as abandoned and swept out of the quota accounting. Kept
+    # generous (well beyond a single presigned URL's expiry) so a legitimate
+    # slow multipart upload of a large file isn't mistaken for abandonment.
+    PENDING_UPLOAD_STALE_SECONDS: int = 6 * 60 * 60
 
     # Anyone can delete their own upload within this many days; after that,
     # it's permanent for everyone, no exceptions.

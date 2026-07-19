@@ -43,6 +43,10 @@ services:
       redis:
         condition: service_healthy
 
+  # Workers have no exposed ports and are stateless (they just pull jobs off
+  # the shared Redis queue), so they scale horizontally for free — run
+  # `docker compose up --scale worker=4` to process thumbnails/posters with
+  # 4 parallel workers instead of editing this file.
   worker:
     build: ./backend
     command: python worker.py

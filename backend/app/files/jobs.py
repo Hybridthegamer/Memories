@@ -72,15 +72,21 @@ def process_uploaded_file(file_id: str, storage_key: str, media_type: str) -> No
                     check=True, capture_output=True, timeout=300,
                 )
 
-            client.upload_file(
-                thumb_path, settings.S3_BUCKET_NAME, thumb_key,
-                ExtraArgs={"ContentType": "image/jpeg"},
-            )
+            storage_service.upload_thumbnail(thumb_path, thumb_key)
 
         _update_file_status(file_id, status="ready", thumbnail_key=thumb_key)
     except Exception:
         logger.exception("Failed to process file %s", file_id)
         _update_file_status(file_id, status="failed", thumbnail_key=None)
+        # A file that fails processing still occupies real, billed B2
+        # storage forever unless it's cleaned up here — and since failed
+        # files are excluded from quota accounting, leaving the object
+        # behind would let anyone rack up unbounded storage cost for free
+        # just by uploading things designed to fail processing.
+        try:
+            storage_service.delete_object(storage_key)
+        except Exception:
+            logger.exception("Failed to clean up storage object for failed file %s", file_id)
         raise
 
 
