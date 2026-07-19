@@ -1,4 +1,5 @@
 import { api } from "../api/client";
+import { rememberUpload } from "./ownership";
 
 export type UploadProgressCallback = (percent: number) => void;
 
@@ -43,10 +44,11 @@ async function uploadSingle(file: File, onProgress: UploadProgressCallback): Pro
     content_type: file.type,
     size_bytes: file.size,
   });
-  const { file_id, upload_url } = data;
+  const { file_id, upload_url, delete_token } = data;
 
   await putWithProgress(upload_url, file, file.type, onProgress);
   await api.post(`/files/${file_id}/confirm`);
+  rememberUpload(file_id, delete_token);
   return file_id;
 }
 
@@ -56,7 +58,7 @@ async function uploadMultipart(file: File, onProgress: UploadProgressCallback): 
     content_type: file.type,
     size_bytes: file.size,
   });
-  const { file_id, part_size_bytes } = data;
+  const { file_id, part_size_bytes, delete_token } = data;
 
   const totalParts = Math.ceil(file.size / part_size_bytes);
   const parts: { part_number: number; etag: string }[] = [];
@@ -88,5 +90,6 @@ async function uploadMultipart(file: File, onProgress: UploadProgressCallback): 
     throw err;
   }
 
+  rememberUpload(file_id, delete_token);
   return file_id;
 }

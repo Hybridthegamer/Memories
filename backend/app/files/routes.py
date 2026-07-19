@@ -1,17 +1,19 @@
+import hashlib
+import secrets
 import uuid
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
 from app.database import get_db
-from app.deps import get_current_user
 from app.files import storage_service
 from app.files.jobs import enqueue_process_file
-from app.models import File, User
-from app.rate_limit import rate_limit_by_user
+from app.models import File
+from app.rate_limit import rate_limit_by_ip
 from app.schemas import (
     ConfirmOut,
     DownloadUrlOut,
@@ -27,36 +29,56 @@ from app.schemas import (
 
 router = APIRouter()
 
-_upload_rate_limit = rate_limit_by_user(
+_upload_rate_limit = rate_limit_by_ip(
     "upload", count=settings.UPLOAD_RATE_LIMIT_COUNT, window_seconds=settings.UPLOAD_RATE_LIMIT_WINDOW_SECONDS
 )
-_part_url_rate_limit = rate_limit_by_user("upload-part", count=600, window_seconds=60)
+_part_url_rate_limit = rate_limit_by_ip("upload-part", count=600, window_seconds=60)
 
 
 def _media_type_from_content_type(content_type: str) -> str:
     return "image" if content_type.startswith("image/") else "video"
 
 
-async def _get_owned_file_or_404(db: AsyncSession, user: User, file_id: uuid.UUID) -> File:
-    result = await db.execute(select(File).where(File.id == file_id, File.owner_id == user.id))
+def _new_delete_token() -> tuple[str, str]:
+    """Returns (raw_token, sha256_hex_hash). Only the hash is ever persisted."""
+    raw = secrets.token_urlsafe(32)
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return raw, digest
+
+
+def _delete_deadline(created_at: datetime) -> datetime:
+    return created_at + timedelta(days=settings.DELETE_WINDOW_DAYS)
+
+
+async def _get_file_or_404(db: AsyncSession, file_id: uuid.UUID) -> File:
+    result = await db.execute(select(File).where(File.id == file_id))
     file = result.scalar_one_or_none()
     if file is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
     return file
 
 
-async def _check_quota(db: AsyncSession, user: User, incoming_bytes: int) -> None:
-    result = await db.execute(
-        select(func.coalesce(func.sum(File.size_bytes), 0)).where(
-            File.owner_id == user.id, File.status != "failed"
-        )
-    )
+async def _check_global_quota(db: AsyncSession, incoming_bytes: int) -> None:
+    result = await db.execute(select(func.coalesce(func.sum(File.size_bytes), 0)).where(File.status != "failed"))
     used_bytes = result.scalar_one()
-    if used_bytes + incoming_bytes > settings.USER_STORAGE_QUOTA_BYTES:
+    if used_bytes + incoming_bytes > settings.GLOBAL_STORAGE_QUOTA_BYTES:
         raise HTTPException(
             status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
-            detail="Storage quota exceeded",
+            detail="The platform's storage is full. Please try again later.",
         )
+
+
+def _to_file_out(f: File, thumbnail_url: str | None) -> FileOut:
+    return FileOut(
+        id=f.id,
+        original_name=f.original_name,
+        media_type=f.media_type,
+        size_bytes=f.size_bytes,
+        status=f.status,
+        thumbnail_url=thumbnail_url,
+        created_at=f.created_at,
+        delete_deadline=_delete_deadline(f.created_at),
+    )
 
 
 # ---- Single upload ----
@@ -65,26 +87,27 @@ async def _check_quota(db: AsyncSession, user: User, incoming_bytes: int) -> Non
 async def upload_request(
     payload: UploadRequestIn,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(_upload_rate_limit),
+    _rl: None = Depends(_upload_rate_limit),
 ):
-    await _check_quota(db, user, payload.size_bytes)
+    await _check_global_quota(db, payload.size_bytes)
 
     if payload.size_bytes > settings.SINGLE_UPLOAD_THRESHOLD_BYTES:
         return UploadRequestOut(upload_method="multipart")
 
     file_id = storage_service.new_file_id()
-    storage_key = storage_service.build_storage_key(str(user.id), str(file_id), payload.filename)
+    storage_key = storage_service.build_storage_key(str(file_id), payload.filename)
     media_type = _media_type_from_content_type(payload.content_type)
+    raw_token, token_hash = _new_delete_token()
 
     file = File(
         id=file_id,
-        owner_id=user.id,
         storage_key=storage_key,
         original_name=payload.filename,
         mime_type=payload.content_type,
         size_bytes=payload.size_bytes,
         media_type=media_type,
         status="pending",
+        delete_token_hash=token_hash,
     )
     db.add(file)
     await db.commit()
@@ -95,6 +118,7 @@ async def upload_request(
         upload_method="single",
         upload_url=upload_url,
         expires_in=settings.UPLOAD_URL_EXPIRY_SECONDS,
+        delete_token=raw_token,
     )
 
 
@@ -102,9 +126,8 @@ async def upload_request(
 async def confirm_upload(
     file_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
 ):
-    file = await _get_owned_file_or_404(db, user, file_id)
+    file = await _get_file_or_404(db, file_id)
     if file.status not in ("pending", "processing"):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"File is already {file.status}")
 
@@ -121,13 +144,14 @@ async def confirm_upload(
 async def multipart_initiate(
     payload: UploadRequestIn,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(_upload_rate_limit),
+    _rl: None = Depends(_upload_rate_limit),
 ):
-    await _check_quota(db, user, payload.size_bytes)
+    await _check_global_quota(db, payload.size_bytes)
 
     file_id = storage_service.new_file_id()
-    storage_key = storage_service.build_storage_key(str(user.id), str(file_id), payload.filename)
+    storage_key = storage_service.build_storage_key(str(file_id), payload.filename)
     media_type = _media_type_from_content_type(payload.content_type)
+    raw_token, token_hash = _new_delete_token()
 
     upload_id = await run_in_threadpool(
         storage_service.initiate_multipart_upload, storage_key, payload.content_type
@@ -135,7 +159,6 @@ async def multipart_initiate(
 
     file = File(
         id=file_id,
-        owner_id=user.id,
         storage_key=storage_key,
         original_name=payload.filename,
         mime_type=payload.content_type,
@@ -143,12 +166,16 @@ async def multipart_initiate(
         media_type=media_type,
         status="pending",
         upload_id=upload_id,
+        delete_token_hash=token_hash,
     )
     db.add(file)
     await db.commit()
 
     return MultipartInitiateOut(
-        file_id=file_id, upload_id=upload_id, part_size_bytes=settings.MULTIPART_PART_SIZE_BYTES
+        file_id=file_id,
+        upload_id=upload_id,
+        part_size_bytes=settings.MULTIPART_PART_SIZE_BYTES,
+        delete_token=raw_token,
     )
 
 
@@ -157,9 +184,9 @@ async def multipart_part_url(
     file_id: uuid.UUID,
     payload: PartUrlIn,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(_part_url_rate_limit),
+    _rl: None = Depends(_part_url_rate_limit),
 ):
-    file = await _get_owned_file_or_404(db, user, file_id)
+    file = await _get_file_or_404(db, file_id)
     if not file.upload_id or file.status != "pending":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="File is not awaiting multipart upload")
 
@@ -172,9 +199,8 @@ async def multipart_complete(
     file_id: uuid.UUID,
     payload: MultipartCompleteIn,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
 ):
-    file = await _get_owned_file_or_404(db, user, file_id)
+    file = await _get_file_or_404(db, file_id)
     if not file.upload_id or file.status not in ("pending", "processing"):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="File is not awaiting multipart upload")
 
@@ -197,9 +223,8 @@ async def multipart_complete(
 async def multipart_abort(
     file_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
 ):
-    file = await _get_owned_file_or_404(db, user, file_id)
+    file = await _get_file_or_404(db, file_id)
     if file.upload_id:
         try:
             await run_in_threadpool(storage_service.abort_multipart_upload, file.storage_key, file.upload_id)
@@ -218,9 +243,9 @@ async def list_files(
     page_size: int = Query(50, ge=1, le=200),
     media_type: str | None = Query(None, pattern="^(image|video)$"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
 ):
-    filters = [File.owner_id == user.id]
+    # Global gallery: every ready/processing file from every uploader, newest first.
+    filters = [File.status != "pending", File.status != "failed"]
     if media_type:
         filters.append(File.media_type == media_type)
 
@@ -241,17 +266,7 @@ async def list_files(
         thumbnail_url = None
         if f.thumbnail_key and f.status == "ready":
             thumbnail_url = storage_service.generate_presigned_download_url(f.thumbnail_key)
-        items.append(
-            FileOut(
-                id=f.id,
-                original_name=f.original_name,
-                media_type=f.media_type,
-                size_bytes=f.size_bytes,
-                status=f.status,
-                thumbnail_url=thumbnail_url,
-                created_at=f.created_at,
-            )
-        )
+        items.append(_to_file_out(f, thumbnail_url))
 
     return FileListOut(items=items, page=page, page_size=page_size, total=total)
 
@@ -260,9 +275,8 @@ async def list_files(
 async def get_download_url(
     file_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
 ):
-    file = await _get_owned_file_or_404(db, user, file_id)
+    file = await _get_file_or_404(db, file_id)
     if file.status not in ("uploaded", "processing", "ready"):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="File is not available for download yet")
 
@@ -274,9 +288,22 @@ async def get_download_url(
 async def delete_file(
     file_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    x_delete_token: str | None = Header(default=None),
 ):
-    file = await _get_owned_file_or_404(db, user, file_id)
+    file = await _get_file_or_404(db, file_id)
+
+    if not x_delete_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing delete token")
+
+    provided_hash = hashlib.sha256(x_delete_token.encode("utf-8")).hexdigest()
+    if not secrets.compare_digest(provided_hash, file.delete_token_hash):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid delete token")
+
+    if datetime.now(timezone.utc) > _delete_deadline(file.created_at):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This file's 3-day delete window has passed — it's permanent now.",
+        )
 
     try:
         await run_in_threadpool(_sync_delete, file.storage_key, file.thumbnail_key)

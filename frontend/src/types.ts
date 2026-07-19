@@ -10,6 +10,7 @@ export interface FileItem {
   status: FileStatus;
   thumbnail_url: string | null;
   created_at: string;
+  delete_deadline: string;
 }
 
 export interface FileListResponse {

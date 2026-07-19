@@ -1,31 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
-
-
-# ---- Auth ----
-
-class UserCreate(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=8, max_length=128)
-
-
-class UserOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    email: str
-
-
-class LoginIn(BaseModel):
-    email: EmailStr
-    password: str
-
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
+from pydantic import BaseModel, Field, field_validator
 
 
 # ---- Files: upload ----
@@ -50,6 +26,9 @@ class UploadRequestOut(BaseModel):
     expires_in: int | None = None
     upload_id: str | None = None
     part_size_bytes: int | None = None
+    # Returned exactly once. The browser must hold onto this (e.g. localStorage)
+    # to be able to delete this file later — the server never stores it raw.
+    delete_token: str | None = None
 
 
 class ConfirmOut(BaseModel):
@@ -61,6 +40,7 @@ class MultipartInitiateOut(BaseModel):
     file_id: uuid.UUID
     upload_id: str
     part_size_bytes: int
+    delete_token: str
 
 
 class PartUrlIn(BaseModel):
@@ -90,6 +70,7 @@ class FileOut(BaseModel):
     status: str
     thumbnail_url: str | None = None
     created_at: datetime
+    delete_deadline: datetime
 
 
 class FileListOut(BaseModel):
