@@ -1,32 +1,70 @@
 import { motion } from "framer-motion";
-import { useMemo, useState } from "react";
-import { isMine } from "../lib/ownership";
+import { useRef, useState } from "react";
 import { BorderBeam } from "./magic/BorderBeam";
 import type { FileItem } from "../types";
 
+const LONG_PRESS_MS = 450;
+const MOVE_CANCEL_PX = 10;
+
 interface FileCardProps {
   file: FileItem;
-  onDownload: () => void;
-  onDelete: () => void;
-  onPlay: () => void;
+  selectionMode: boolean;
+  selected: boolean;
+  onOpen: (fileId: string) => void;
+  onLongPress: (fileId: string) => void;
+  onToggleSelect: (fileId: string) => void;
 }
 
-function formatTimeLeft(deadline: string): string {
-  const ms = new Date(deadline).getTime() - Date.now();
-  if (ms <= 0) return "";
-  const hours = Math.floor(ms / (1000 * 60 * 60));
-  if (hours < 1) return "under 1h left to delete";
-  if (hours < 24) return `${hours}h left to delete`;
-  return `${Math.floor(hours / 24)}d left to delete`;
-}
-
-export function FileCard({ file, onDownload, onDelete, onPlay }: FileCardProps) {
+export function FileCard({ file, selectionMode, selected, onOpen, onLongPress, onToggleSelect }: FileCardProps) {
   const [hovered, setHovered] = useState(false);
-  const mine = useMemo(() => isMine(file.id), [file.id]);
-  const withinWindow = useMemo(() => new Date(file.delete_deadline).getTime() > Date.now(), [file.delete_deadline]);
-  const canDelete = mine && withinWindow;
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const startPos = useRef<{ x: number; y: number } | null>(null);
+  const firedLongPress = useRef(false);
   const isVideo = file.media_type === "video";
-  const clickable = isVideo && file.status === "ready";
+  const canOpen = file.status === "ready";
+
+  function clearTimer() {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }
+
+  function onPointerDown(e: React.PointerEvent) {
+    if (e.button !== undefined && e.button !== 0) return; // left click / touch only
+    startPos.current = { x: e.clientX, y: e.clientY };
+    firedLongPress.current = false;
+    clearTimer();
+    timerRef.current = setTimeout(() => {
+      firedLongPress.current = true;
+      onLongPress(file.id);
+    }, LONG_PRESS_MS);
+  }
+
+  function onPointerMove(e: React.PointerEvent) {
+    if (!startPos.current) return;
+    const dx = e.clientX - startPos.current.x;
+    const dy = e.clientY - startPos.current.y;
+    if (Math.hypot(dx, dy) > MOVE_CANCEL_PX) clearTimer();
+  }
+
+  function onPointerUp() {
+    clearTimer();
+  }
+
+  function onClick() {
+    if (firedLongPress.current) {
+      // The long-press already handled this interaction; the click that
+      // follows pointerup shouldn't also toggle/open.
+      firedLongPress.current = false;
+      return;
+    }
+    if (selectionMode) {
+      onToggleSelect(file.id);
+    } else if (canOpen) {
+      onOpen(file.id);
+    }
+  }
 
   return (
     <motion.div
@@ -37,18 +75,20 @@ export function FileCard({ file, onDownload, onDelete, onPlay }: FileCardProps) 
       transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      className="group relative mb-4 break-inside-avoid overflow-hidden rounded-2xl border border-border bg-surface"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={clearTimer}
+      onContextMenu={(e) => e.preventDefault()}
+      onClick={onClick}
+      className={`group relative mb-4 select-none break-inside-avoid overflow-hidden rounded-2xl border bg-surface transition-colors ${
+        selected ? "border-accent" : "border-border"
+      } ${selectionMode || canOpen ? "cursor-pointer" : ""}`}
     >
-      {hovered && <BorderBeam radius={16} />}
+      {hovered && !selectionMode && <BorderBeam radius={16} />}
 
       {file.status === "ready" && file.thumbnail_url ? (
-        <img
-          src={file.thumbnail_url}
-          alt={file.original_name}
-          loading="lazy"
-          onClick={clickable ? onPlay : undefined}
-          className={`block w-full ${clickable ? "cursor-pointer" : ""}`}
-        />
+        <img src={file.thumbnail_url} alt={file.original_name} loading="lazy" className="block w-full" draggable={false} />
       ) : file.status === "failed" ? (
         <div className="flex aspect-[4/3] w-full items-center justify-center bg-surface2 text-sm text-muted">
           Processing failed
@@ -71,27 +111,21 @@ export function FileCard({ file, onDownload, onDelete, onPlay }: FileCardProps) 
         </span>
       )}
 
-      <div className="pointer-events-none absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-bg/90 via-bg/0 to-bg/0 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
-        <div className="pointer-events-auto flex items-center justify-between gap-2 p-3">
-          <button
-            onClick={onDownload}
-            className="rounded-full bg-ink/10 px-3 py-1.5 text-xs font-medium text-ink backdrop-blur-sm transition-colors hover:bg-accent hover:text-accentInk"
+      {selectionMode && (
+        <div
+          className={`pointer-events-none absolute inset-0 flex items-start justify-end p-2 transition-colors ${
+            selected ? "bg-accent/20" : "bg-bg/10"
+          }`}
+        >
+          <span
+            className={`flex h-6 w-6 items-center justify-center rounded-full border-2 text-xs font-bold backdrop-blur-sm ${
+              selected ? "border-accent bg-accent text-accentInk" : "border-ink/60 bg-bg/50 text-transparent"
+            }`}
           >
-            Download
-          </button>
-          {canDelete ? (
-            <button
-              onClick={onDelete}
-              className="rounded-full px-3 py-1.5 text-xs font-medium text-ink/80 transition-colors hover:bg-red-500/20 hover:text-red-300"
-              title={formatTimeLeft(file.delete_deadline)}
-            >
-              Delete
-            </button>
-          ) : (
-            <span className="text-xs text-ink/50">{mine ? "permanent now" : ""}</span>
-          )}
+            ✓
+          </span>
         </div>
-      </div>
+      )}
     </motion.div>
   );
 }

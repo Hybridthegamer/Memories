@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { deleteFile, fetchDownloadUrl, fetchFiles, fetchFolders } from "../api/files";
+import { deleteFile, fetchFiles, fetchFolders } from "../api/files";
 import type { FileListResponse } from "../types";
 
 const PAGE_SIZE = 30;
@@ -47,8 +47,3 @@ export function useDeleteFile() {
   });
 }
 
-export function useDownloadUrl() {
-  return useMutation({
-    mutationFn: (fileId: string) => fetchDownloadUrl(fileId),
-  });
-}
