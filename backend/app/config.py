@@ -6,7 +6,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    SECRET_KEY: str = "changeme-generate-a-real-random-secret"
     ENVIRONMENT: str = "development"
 
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/storage_platform"
@@ -23,21 +22,24 @@ class Settings(BaseSettings):
     MULTIPART_PART_SIZE_BYTES: int = 10 * 1024 * 1024
     SINGLE_UPLOAD_THRESHOLD_BYTES: int = 50 * 1024 * 1024
 
-    JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
-
     # Kept as a plain string (not list[str]) because pydantic-settings tries to
     # JSON-decode any env var mapped to a list-typed field before validators
     # run — that breaks on a plain comma-separated value. Parse it ourselves
     # via the property below instead.
     CORS_ALLOWED_ORIGINS: str = "http://localhost:5173"
 
-    # Rate limiting (Phase 3 hardening) — requests per window, per user, for upload endpoints.
+    # Rate limiting — requests per window, per IP, for upload endpoints. This is
+    # the main abuse guard now that uploads are fully anonymous/unauthenticated.
     UPLOAD_RATE_LIMIT_COUNT: int = 30
     UPLOAD_RATE_LIMIT_WINDOW_SECONDS: int = 60
 
-    # Per-user forever-storage quota, in bytes. Default 50GB.
-    USER_STORAGE_QUOTA_BYTES: int = 50 * 1024 * 1024 * 1024
+    # Global forever-storage quota across all uploads from everyone, in bytes.
+    # Default 1TB, matching the platform's budget target.
+    GLOBAL_STORAGE_QUOTA_BYTES: int = 1024 * 1024 * 1024 * 1024
+
+    # Anyone can delete their own upload within this many days; after that,
+    # it's permanent for everyone, no exceptions.
+    DELETE_WINDOW_DAYS: int = 3
 
     # DB connection pool sizing — tuned so a single backend instance can
     # comfortably serve dozens of concurrent requests without exhausting

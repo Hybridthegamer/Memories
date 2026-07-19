@@ -4,7 +4,6 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.auth.routes import router as auth_router
 from app.config import settings
 from app.files.routes import router as files_router
 
@@ -40,5 +39,4 @@ async def healthz():
     return {"status": "ok"}
 
 
-app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(files_router, prefix="/api/v1/files", tags=["files"])

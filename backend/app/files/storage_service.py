@@ -22,11 +22,11 @@ def get_s3_client():
     return _s3_client
 
 
-def build_storage_key(owner_id: str, file_id: str, filename: str) -> str:
+def build_storage_key(file_id: str, filename: str) -> str:
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
     # Strip anything not alphanumeric to keep the key safe regardless of client input.
     ext = "".join(c for c in ext if c.isalnum()) or "bin"
-    return f"u/{owner_id}/{file_id}/original.{ext}"
+    return f"f/{file_id}/original.{ext}"
 
 
 def build_thumbnail_key(storage_key: str) -> str:
